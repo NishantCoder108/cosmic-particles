@@ -14,7 +14,7 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let attributes = Window::default_attributes()
-                .with_title("Triangle Lab")
+                .with_title("Nishant's Lab")
                 .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
 
             match event_loop.create_window(attributes) {
@@ -38,7 +38,7 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("Closing Triangle Lab");
+                println!("Closing Nishant's Lab");
                 event_loop.exit();
             }
             _ => {}
