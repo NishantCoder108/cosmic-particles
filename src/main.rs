@@ -1,9 +1,9 @@
 use std::sync::Arc;
+
 use wgpu::{
     Color, CommandEncoderDescriptor, CurrentSurfaceTexture, DeviceDescriptor, Instance, LoadOp,
     Operations, PowerPreference, PresentMode, RenderPassColorAttachment, RenderPassDescriptor,
-    RequestAdapterOptions, SurfaceColorSpace, SurfaceConfiguration, TextureUsages,
-    TextureViewDescriptor,
+    RequestAdapterOptions, SurfaceConfiguration, TextureUsages, TextureViewDescriptor,
 };
 use winit::{
     application::ApplicationHandler,
@@ -14,29 +14,30 @@ use winit::{
 
 struct App {
     window: Option<Arc<Window>>,
-    instance: Option<Instance>,
     surface: Option<wgpu::Surface<'static>>,
     device: Option<wgpu::Device>,
     queue: Option<wgpu::Queue>,
     config: Option<SurfaceConfiguration>,
+    pipeline: Option<wgpu::RenderPipeline>,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
             window: None,
-            instance: None,
             surface: None,
             device: None,
             queue: None,
             config: None,
+            pipeline: None,
         }
     }
 }
 
 impl App {
     fn render(&mut self) {
-        let (Some(surface), Some(device), Some(queue)) = (&self.surface, &self.device, &self.queue)
+        let (Some(surface), Some(device), Some(queue), Some(pipeline)) =
+            (&self.surface, &self.device, &self.queue, &self.pipeline)
         else {
             return;
         };
@@ -45,15 +46,15 @@ impl App {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
             }
+
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return,
-            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+
+            CurrentSurfaceTexture::Outdated
+            | CurrentSurfaceTexture::Lost
+            | CurrentSurfaceTexture::Validation => {
                 if let Some(config) = &self.config {
                     surface.configure(device, config);
                 }
-                return;
-            }
-            CurrentSurfaceTexture::Validation => {
-                eprintln!("Surface texture validation error");
                 return;
             }
         };
@@ -61,12 +62,12 @@ impl App {
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Triangle Lab Encoder"),
+            label: Some("Triangle Render Encoder"),
         });
 
         {
-            let _render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Clear Screen Pass"),
+            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Triangle Render Pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -74,7 +75,7 @@ impl App {
                     ops: Operations {
                         load: LoadOp::Clear(Color {
                             r: 0.03,
-                            g: 0.3,
+                            g: 0.05,
                             b: 0.12,
                             a: 1.0,
                         }),
@@ -86,6 +87,11 @@ impl App {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            render_pass.set_pipeline(pipeline);
+
+            // Execute the vertex shader for 3 vertices.
+            render_pass.draw(0..3, 0..1);
         }
 
         queue.submit(Some(encoder.finish()));
@@ -103,8 +109,8 @@ impl ApplicationHandler for App {
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("Triangle Lab — GPU")
-                        .with_inner_size(winit::dpi::LogicalSize::new(800, 600)),
+                        .with_title("Triangle Lab — First GPU Triangle")
+                        .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0)),
                 )
                 .expect("Failed to create window"),
         );
@@ -138,29 +144,64 @@ impl ApplicationHandler for App {
             .find(|format| format.is_srgb())
             .unwrap_or(capabilities.formats[0]);
 
+        let size = window.inner_size();
+
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: 800,
-            height: 600,
+            width: size.width.max(1),
+            height: size.height.max(1),
             present_mode: PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],
-            color_space: SurfaceColorSpace::Auto,
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
         surface.configure(&device, &config);
 
+        // Load our WGSL source code into a GPU shader module.
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Triangle Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        // Create a pipeline that connects our shader to the surface format.
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Triangle Pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         self.window = Some(window);
-        self.instance = Some(instance);
         self.surface = Some(surface);
         self.device = Some(device);
         self.queue = Some(queue);
         self.config = Some(config);
+        self.pipeline = Some(pipeline);
 
+        println!("Render pipeline created!");
         self.render();
-        println!("GPU initialized and first frame submitted!");
     }
 
     fn window_event(
@@ -190,6 +231,7 @@ impl ApplicationHandler for App {
                     config.height = size.height;
                     surface.configure(device, config);
                 }
+
                 self.render();
             }
 
@@ -200,15 +242,10 @@ impl ApplicationHandler for App {
 
 fn main() {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
+
     let mut app = App::default();
 
     event_loop
         .run_app(&mut app)
         .expect("Failed to run application");
 }
-
-// @vertex identifies the vertex shader entry point.
-
-// @builtin(vertex_index) gives each generated vertex its index.
-
-// @fragment identifies the fragment shader entry point.
