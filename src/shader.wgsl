@@ -40,15 +40,19 @@ fn vs_main(
     let purple = vec3<f32>(0.45, 0.12, 1.0);
     let pink = vec3<f32>(1.0, 0.08, 0.55);
     let blue = vec3<f32>(0.12, 0.3, 1.0);  
+    let gold   = vec3<f32>(1.0, 0.69, 0.0);
+    let amber  = vec3<f32>(1.0, 0.30, 0.08);
+    let cream  = vec3<f32>(1.0, 0.91, 0.64);
+    let bronze = vec3<f32>(0.55, 0.22, 0.06);
 
     var output: VertexOutput;
     output.position = vec4<f32>(position, 0.0, 1.0);
     output.local_position = corner;    
 
     output.color = mix(
-        mix(cyan, blue, hue),
-        mix(purple, pink, hue),
-        hue
+         mix(gold, amber, hue),
+         mix(bronze, cream, hue),
+         hue
     );    
 
     return output;
