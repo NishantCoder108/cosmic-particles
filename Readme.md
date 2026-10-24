@@ -12,13 +12,22 @@ Exploring GPU computing, particle simulation, shader programming, and real-time 
 
 Watch the particles move, form intricate patterns, and leave colorful trails.
 
-**[▶ Watch the full demo video](YOUR_VIDEO_URL)**
+**[▶ Watch the full demo video](https://youtu.be/07ur_Wi_ss4)**
 
-![Cosmic Particles animated demo](./assets/cosmic-particles-demo.gif)
+
 
 ## Screenshot
+<table>
+  <tr>
+    <td><img src="./assests/cosmic-danger.png" width="100%" alt="Cosmic Particles visualization"></td>
+    <td><img src="./assests/cosmic-blue-mid.png" width="100%" alt="Cosmic Particles visualization"></td>
+    <td><img src="./assests/cosmic-yellow.png" width="100%" alt="Cosmic Particles visualization"></td>
+    <td><img src="./assests/cosmic-start.png" width="100%" alt="Cosmic Particles visualization"></td>
+  </tr>
+</table>
 
-![Cosmic Particles visualization](./assets/cosmic-particles.png)
+
+
 
 ## About the Project
 
