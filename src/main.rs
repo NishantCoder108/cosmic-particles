@@ -206,3 +206,9 @@ fn main() {
         .run_app(&mut app)
         .expect("Failed to run application");
 }
+
+// @vertex identifies the vertex shader entry point.
+
+// @builtin(vertex_index) gives each generated vertex its index.
+
+// @fragment identifies the fragment shader entry point.
