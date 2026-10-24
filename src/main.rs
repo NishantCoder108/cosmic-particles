@@ -44,6 +44,8 @@ struct App {
     trail_format: Option<wgpu::TextureFormat>,
     trail_index: usize,
 
+    present_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    present_pipeline: Option<wgpu::RenderPipeline>,
     last_frame: Instant,
 }
 
@@ -69,6 +71,8 @@ impl Default for App {
             trail_bind_group_layout: None,
             trail_format: None,
             trail_index: 0,
+            present_bind_groups: None,
+            present_pipeline: None,
             last_frame: Instant::now(),
         }
     }
@@ -90,6 +94,8 @@ impl App {
             Some(trail_views),
             Some(trail_bind_groups),
             Some(trail_pipeline),
+            Some(present_bind_groups),
+            Some(present_pipeline),
         ) = (
             &self.surface,
             &self.device,
@@ -104,6 +110,8 @@ impl App {
             &self.trail_views,
             &self.trail_bind_groups,
             &self.trail_pipeline,
+            &self.present_bind_groups,
+            &self.present_pipeline,
         )
         else {
             return;
@@ -113,14 +121,15 @@ impl App {
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.033);
+
         self.last_frame = now;
 
-        // WGSL Simulation layout: f32, u32, vec2<u32>.
-        // Encode the first f32 as its raw bit pattern.
+        // Update simulation parameters.
         let simulation_data: [u32; 4] = [dt.to_bits(), PARTICLE_COUNT, 0, 0];
 
         queue.write_buffer(simulation_buffer, 0, bytemuck::cast_slice(&simulation_data));
 
+        // Acquire the window's next frame.
         let frame = match surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
@@ -142,7 +151,7 @@ impl App {
             label: Some("Particle Simulation Encoder"),
         });
 
-        // Pass 1: update every particle on the GPU.
+        // Pass 1: Update every particle on the GPU.
         {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                 label: Some("Particle Compute Pass"),
@@ -157,10 +166,11 @@ impl App {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+        // Alternate between the two trail textures.
         let read_index = trail_index;
         let write_index = 1 - read_index;
 
-        // Pass 2: Fade the previous frame into the other trail texture.
+        // Pass 2: Fade the previous frame into the other texture.
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Trail Fade Pass"),
@@ -186,10 +196,12 @@ impl App {
 
             pass.set_pipeline(trail_pipeline);
             pass.set_bind_group(0, &trail_bind_groups[read_index], &[]);
+
+            // Fullscreen triangle.
             pass.draw(0..3, 0..1);
         }
 
-        // Pass 3: Draw new particles over the faded frame.
+        // Pass 3: Draw the current particles over the faded trails.
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Particle Render Pass"),
@@ -213,18 +225,50 @@ impl App {
             pass.draw(0..6, 0..PARTICLE_COUNT);
         }
 
+        // Pass 4: Display the completed trail texture in the window.
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Present Trails Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(Color {
+                            r: 0.015,
+                            g: 0.02,
+                            b: 0.055,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(present_pipeline);
+            pass.set_bind_group(0, &present_bind_groups[write_index], &[]);
+
+            // Fullscreen triangle.
+            pass.draw(0..3, 0..1);
+        }
+
+        // Submit all four passes together.
         queue.submit(Some(encoder.finish()));
         queue.present(frame);
 
-        // Switch buffers for the next frame.
+        // The newly written texture becomes the previous frame.
         self.trail_index = write_index;
 
-        // Keep the animation running.
+        // Request the next frame.
         if let Some(window) = &self.window {
             window.request_redraw();
         }
 
-        let _ = particle_buffer; // Buffer remains owned by App.
+        let _ = particle_buffer;
     }
 }
 
@@ -448,6 +492,45 @@ impl ApplicationHandler for App {
             trail_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
         ];
 
+        let trail_textures = [create_trail_texture(), create_trail_texture()];
+
+        let trail_views = [
+            trail_textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
+            trail_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
+        ];
+
+        // Initialize both trail textures before sampling them.
+        let mut trail_init_encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Initialize Trail Textures"),
+            });
+
+        for trail_view in &trail_views {
+            let _clear_pass = trail_init_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Trail Texture"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: trail_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.015,
+                            g: 0.02,
+                            b: 0.055,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+
+        queue.submit(Some(trail_init_encoder.finish()));
+
         let trail_bind_groups = [
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Trail Bind Group 0"),
@@ -465,6 +548,37 @@ impl ApplicationHandler for App {
             }),
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Trail Bind Group 1"),
+                layout: &trail_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&trail_views[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&trail_sampler),
+                    },
+                ],
+            }),
+        ];
+
+        let present_bind_groups = [
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Presentation Bind Group 0"),
+                layout: &trail_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&trail_views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&trail_sampler),
+                    },
+                ],
+            }),
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Presentation Bind Group 1"),
                 layout: &trail_bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -500,6 +614,44 @@ impl ApplicationHandler for App {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: trail_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Presentation Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+        });
+
+        let present_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Presentation Pipeline Layout"),
+                bind_group_layouts: &[Some(&trail_bind_group_layout)],
+                immediate_size: 0,
+            });
+
+        let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Presentation Pipeline"),
+            layout: Some(&present_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &present_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &present_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -587,6 +739,8 @@ impl ApplicationHandler for App {
         self.trail_bind_group_layout = Some(trail_bind_group_layout);
         self.trail_format = Some(trail_format);
         self.trail_index = 0;
+        self.present_bind_groups = Some(present_bind_groups);
+        self.present_pipeline = Some(present_pipeline);
         self.last_frame = Instant::now();
 
         println!("GPU particle simulation ready: {PARTICLE_COUNT} particles");
