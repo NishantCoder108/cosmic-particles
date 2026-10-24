@@ -66,7 +66,13 @@ impl App {
 
         let angle = self.started_at.elapsed().as_secs_f32();
 
-        let uniform_data: [f32; 4] = [angle, 0.0, 0.0, 0.0];
+        let aspect = self
+            .config
+            .as_ref()
+            .map(|config| config.width as f32 / config.height as f32)
+            .unwrap_or(4.0 / 3.0);
+
+        let uniform_data: [f32; 4] = [angle, aspect, 0.0, 0.0];
 
         queue.write_buffer(uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
@@ -118,7 +124,7 @@ impl App {
 
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            pass.draw(0..6, 0..2000);
         }
 
         queue.submit(Some(encoder.finish()));
@@ -253,7 +259,7 @@ impl ApplicationHandler for App {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
