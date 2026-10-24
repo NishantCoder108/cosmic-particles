@@ -1,14 +1,17 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use wgpu::{
-    Color, CommandEncoderDescriptor, CurrentSurfaceTexture, DeviceDescriptor, Instance, LoadOp,
-    Operations, PowerPreference, PresentMode, RenderPassColorAttachment, RenderPassDescriptor,
-    RequestAdapterOptions, SurfaceConfiguration, TextureUsages, TextureViewDescriptor,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BindingType, Buffer,
+    BufferBindingType, BufferDescriptor, BufferUsages, Color, CommandEncoderDescriptor,
+    CurrentSurfaceTexture, DeviceDescriptor, Instance, LoadOp, Operations, PowerPreference,
+    PresentMode, RenderPassColorAttachment, RenderPassDescriptor, RequestAdapterOptions,
+    ShaderStages, SurfaceConfiguration, TextureUsages, TextureViewDescriptor,
 };
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
 
@@ -19,6 +22,9 @@ struct App {
     queue: Option<wgpu::Queue>,
     config: Option<SurfaceConfiguration>,
     pipeline: Option<wgpu::RenderPipeline>,
+    uniform_buffer: Option<Buffer>,
+    bind_group: Option<BindGroup>,
+    started_at: Instant,
 }
 
 impl Default for App {
@@ -30,17 +36,39 @@ impl Default for App {
             queue: None,
             config: None,
             pipeline: None,
+            uniform_buffer: None,
+            bind_group: None,
+            started_at: Instant::now(),
         }
     }
 }
 
 impl App {
     fn render(&mut self) {
-        let (Some(surface), Some(device), Some(queue), Some(pipeline)) =
-            (&self.surface, &self.device, &self.queue, &self.pipeline)
+        let (
+            Some(surface),
+            Some(device),
+            Some(queue),
+            Some(pipeline),
+            Some(uniform_buffer),
+            Some(bind_group),
+        ) = (
+            &self.surface,
+            &self.device,
+            &self.queue,
+            &self.pipeline,
+            &self.uniform_buffer,
+            &self.bind_group,
+        )
         else {
             return;
         };
+
+        let angle = self.started_at.elapsed().as_secs_f32();
+
+        let uniform_data: [f32; 4] = [angle, 0.0, 0.0, 0.0];
+
+        queue.write_buffer(uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
         let frame = match surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -62,12 +90,12 @@ impl App {
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Triangle Render Encoder"),
+            label: Some("Animated Triangle Encoder"),
         });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Triangle Render Pass"),
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Animated Triangle Pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -88,10 +116,9 @@ impl App {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(pipeline);
-
-            // Execute the vertex shader for 3 vertices.
-            render_pass.draw(0..3, 0..1);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..3, 0..1);
         }
 
         queue.submit(Some(encoder.finish()));
@@ -101,6 +128,8 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Poll);
+
         if self.window.is_some() {
             return;
         }
@@ -109,7 +138,7 @@ impl ApplicationHandler for App {
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("Triangle Lab — First GPU Triangle")
+                        .with_title("Triangle Lab — Animated GPU Triangle")
                         .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0)),
                 )
                 .expect("Failed to create window"),
@@ -127,7 +156,7 @@ impl ApplicationHandler for App {
             force_fallback_adapter: false,
             apply_limit_buckets: false,
         }))
-        .expect("Failed to find a GPU adapter");
+        .expect("Failed to find GPU adapter");
 
         println!("GPU adapter: {:?}", adapter.get_info());
 
@@ -160,16 +189,55 @@ impl ApplicationHandler for App {
 
         surface.configure(&device, &config);
 
-        // Load our WGSL source code into a GPU shader module.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Triangle Shader"),
+            label: Some("Animated Triangle Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        // Create a pipeline that connects our shader to the surface format.
+        // Reserve 16 bytes for one vec4<f32> uniform.
+        let uniform_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Animation Uniform"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Animation Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Animation Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Animated Triangle Pipeline Layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Triangle Pipeline"),
-            layout: None,
+            label: Some("Animated Triangle Pipeline"),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
@@ -193,15 +261,17 @@ impl ApplicationHandler for App {
             cache: None,
         });
 
-        self.window = Some(window);
+        self.window = Some(Arc::clone(&window));
         self.surface = Some(surface);
         self.device = Some(device);
         self.queue = Some(queue);
         self.config = Some(config);
         self.pipeline = Some(pipeline);
+        self.uniform_buffer = Some(uniform_buffer);
+        self.bind_group = Some(bind_group);
 
-        println!("Render pipeline created!");
-        self.render();
+        println!("Animated triangle initialized!");
+        window.request_redraw();
     }
 
     fn window_event(
@@ -236,6 +306,12 @@ impl ApplicationHandler for App {
             }
 
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 }
