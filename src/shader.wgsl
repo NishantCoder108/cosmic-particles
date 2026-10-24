@@ -30,7 +30,7 @@ fn vs_main(
     let particle = particles[instance_index];
     let corner = corners[vertex_index];
 
-    let size = 0.003;
+    let size = 0.002;
     let position = particle.position + corner * size;
 
     let id = f32(instance_index);
@@ -50,8 +50,8 @@ fn vs_main(
     output.local_position = corner;    
 
     output.color = mix(
-         mix(gold, amber, hue),
-         mix(bronze, cream, hue),
+         mix(blue, amber, hue),
+         mix(blue, blue, hue),
          hue
     );    
 
