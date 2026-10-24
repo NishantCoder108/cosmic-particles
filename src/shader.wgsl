@@ -33,17 +33,23 @@ fn vs_main(
     let size = 0.006;
     let position = particle.position + corner * size;
 
-    let id = f32(instance_index);
-    let hue = fract(sin(id * 12.9898) * 43758.5453);
+   let id = f32(instance_index);
+    let hue = fract(sin(id * 12.9898) * 43758.5453);    
+
+    let cyan = vec3<f32>(0.0, 0.90, 1.0);
+    let purple = vec3<f32>(0.72, 0.30, 1.0);
+    let pink = vec3<f32>(1.0, 0.30, 1.0);
+    let blue = vec3<f32>(0.30, 0.48, 1.0);    
 
     var output: VertexOutput;
     output.position = vec4<f32>(position, 0.0, 1.0);
-    output.local_position = corner;
+    output.local_position = corner;    
+
     output.color = mix(
-        vec3<f32>(0.05, 0.85, 1.0),
-        vec3<f32>(0.75, 0.20, 1.0),
+        mix(cyan, blue, hue),
+        mix(purple, pink, hue),
         hue
-    );
+    );    
 
     return output;
 }
