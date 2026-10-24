@@ -16,7 +16,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-const PARTICLE_COUNT: u32 = 2000;
+const PARTICLE_COUNT: u32 = 100_000;
 const WORKGROUP_SIZE: u32 = 64;
 
 struct App {
