@@ -38,6 +38,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         input.uv
     );
 
+
     // Fade previous pixels by 3% each frame.
-    return vec4<f32>(old_color.rgb * 0.97, 1.0);
+    //return vec4<f32>(old_color.rgb * 0.97, 1.0);
+    return vec4<f32>(old_color.rgb * 0.985, 1.0);
 }
