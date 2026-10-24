@@ -180,9 +180,9 @@ impl App {
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
-                            r: 0.015,
-                            g: 0.02,
-                            b: 0.055,
+                            r: 0.005,
+                            g: 0.008,
+                            b: 0.025,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
