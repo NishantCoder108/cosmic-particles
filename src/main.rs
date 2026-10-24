@@ -35,6 +35,15 @@ struct App {
     render_pipeline: Option<wgpu::RenderPipeline>,
     render_bind_group: Option<BindGroup>,
 
+    trail_textures: Option<[wgpu::Texture; 2]>,
+    trail_views: Option<[wgpu::TextureView; 2]>,
+    trail_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    trail_pipeline: Option<wgpu::RenderPipeline>,
+    trail_sampler: Option<wgpu::Sampler>,
+    trail_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    trail_format: Option<wgpu::TextureFormat>,
+    trail_index: usize,
+
     last_frame: Instant,
 }
 
@@ -52,6 +61,14 @@ impl Default for App {
             compute_bind_group: None,
             render_pipeline: None,
             render_bind_group: None,
+            trail_textures: None,
+            trail_views: None,
+            trail_bind_groups: None,
+            trail_pipeline: None,
+            trail_sampler: None,
+            trail_bind_group_layout: None,
+            trail_format: None,
+            trail_index: 0,
             last_frame: Instant::now(),
         }
     }
@@ -70,6 +87,9 @@ impl App {
             Some(compute_bind_group),
             Some(render_pipeline),
             Some(render_bind_group),
+            Some(trail_views),
+            Some(trail_bind_groups),
+            Some(trail_pipeline),
         ) = (
             &self.surface,
             &self.device,
@@ -81,10 +101,15 @@ impl App {
             &self.compute_bind_group,
             &self.render_pipeline,
             &self.render_bind_group,
+            &self.trail_views,
+            &self.trail_bind_groups,
+            &self.trail_pipeline,
         )
         else {
             return;
         };
+
+        let trail_index = self.trail_index;
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.033);
@@ -132,12 +157,15 @@ impl App {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Pass 2: render the newly updated particle positions.
+        let read_index = trail_index;
+        let write_index = 1 - read_index;
+
+        // Pass 2: Fade the previous frame into the other trail texture.
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Particle Render Pass"),
+                label: Some("Trail Fade Pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
+                    view: &trail_views[write_index],
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
@@ -156,6 +184,30 @@ impl App {
                 multiview_mask: None,
             });
 
+            pass.set_pipeline(trail_pipeline);
+            pass.set_bind_group(0, &trail_bind_groups[read_index], &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 3: Draw new particles over the faded frame.
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Particle Render Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &trail_views[write_index],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
             pass.set_pipeline(render_pipeline);
             pass.set_bind_group(0, render_bind_group, &[]);
             pass.draw(0..6, 0..PARTICLE_COUNT);
@@ -163,6 +215,9 @@ impl App {
 
         queue.submit(Some(encoder.finish()));
         queue.present(frame);
+
+        // Switch buffers for the next frame.
+        self.trail_index = write_index;
 
         // Keep the animation running.
         if let Some(window) = &self.window {
@@ -331,6 +386,131 @@ impl ApplicationHandler for App {
             label: Some("Particle Render Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
+        let trail_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Trail Fade Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("trail.wgsl").into()),
+        });
+        let trail_format = config.format;
+        let trail_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Trail Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let trail_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Trail Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let create_trail_texture = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Particle Trail Texture"),
+                size: wgpu::Extent3d {
+                    width: config.width,
+                    height: config.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: trail_format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+
+        let trail_textures = [create_trail_texture(), create_trail_texture()];
+
+        let trail_views = [
+            trail_textures[0].create_view(&wgpu::TextureViewDescriptor::default()),
+            trail_textures[1].create_view(&wgpu::TextureViewDescriptor::default()),
+        ];
+
+        let trail_bind_groups = [
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Trail Bind Group 0"),
+                layout: &trail_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&trail_views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&trail_sampler),
+                    },
+                ],
+            }),
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Trail Bind Group 1"),
+                layout: &trail_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&trail_views[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&trail_sampler),
+                    },
+                ],
+            }),
+        ];
+
+        let trail_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Trail Pipeline Layout"),
+                bind_group_layouts: &[Some(&trail_bind_group_layout)],
+                immediate_size: 0,
+            });
+
+        let trail_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Trail Fade Pipeline"),
+            layout: Some(&trail_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &trail_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &trail_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: trail_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let render_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Render Bind Group Layout"),
@@ -399,6 +579,14 @@ impl ApplicationHandler for App {
         self.compute_bind_group = Some(compute_bind_group);
         self.render_pipeline = Some(render_pipeline);
         self.render_bind_group = Some(render_bind_group);
+        self.trail_textures = Some(trail_textures);
+        self.trail_views = Some(trail_views);
+        self.trail_bind_groups = Some(trail_bind_groups);
+        self.trail_pipeline = Some(trail_pipeline);
+        self.trail_sampler = Some(trail_sampler);
+        self.trail_bind_group_layout = Some(trail_bind_group_layout);
+        self.trail_format = Some(trail_format);
+        self.trail_index = 0;
         self.last_frame = Instant::now();
 
         println!("GPU particle simulation ready: {PARTICLE_COUNT} particles");
