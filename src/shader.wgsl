@@ -30,7 +30,7 @@ fn vs_main(
     let particle = particles[instance_index];
     let corner = corners[vertex_index];
 
-    let size = 0.006;
+    let size = 0.003;
     let position = particle.position + corner * size;
 
     let id = f32(instance_index);
